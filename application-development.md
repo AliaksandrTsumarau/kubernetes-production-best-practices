@@ -19,7 +19,7 @@ The kubelet executes the check and decides if the container should be restarted.
 - The official Kubernetes documentation offers some practical advice on how to [configure Liveness, Readiness and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/).
 - [Liveness probes are dangerous](https://srcco.de/posts/kubernetes-liveness-probes-are-dangerous.html) has some information on how to set (or not) dependencies in your readiness probes.
 
-### Containers have readiness probes
+### Containers have Readiness probes
 
 > Please note that there's no default value for readiness and liveness.
 
@@ -27,17 +27,35 @@ If you don't set the readiness probe, the kubelet assumes that the app is ready 
 
 If the container takes 2 minutes to start, all the requests to it will fail for those 2 minutes.
 
-### Avoid using the Liveness probe (if you can)
+### Containers crash when there's a fatal error
 
-The Liveness probe is designed to restart your container when it's stuck due to edge-cases such as a dead-lock.
+If the application reaches an unrecoverable error, [you should let it crash](https://blog.colinbreck.com/kubernetes-liveness-and-readiness-probes-revisited-how-to-avoid-shooting-yourself-in-the-other-foot/#letitcrash).
 
-_But if you can detect the deadlock and signal a failing liveness probe, why not exiting from the deadlock in the first place?_
+Examples of such unrecoverable errors are:
 
-It's a fair question, and that's perhaps the reason why liveness probes are generally not necessary.
+- an uncaught exception
+- a typo in the code (for dynamic languages)
+- unable to load a header or dependency
 
-It's a best practice to let the app crash rather than signalling a failing liveness probe.
+Please note that you should not signal a failing Liveness probe.
 
-You can find [more details about using (or not) liveness probes in this article](https://blog.colinbreck.com/kubernetes-liveness-and-readiness-probes-revisited-how-to-avoid-shooting-yourself-in-the-other-foot/#letitcrash).
+Instead, you should immediately exit the process and let the kubelet restart the container.
+
+### Configure a passive Liveness probe
+
+The Liveness probe is designed to restart your container when it's stuck.
+
+Consider the following scenario: if your application is processing an infinite loop, there's no way to exit or ask for help.
+
+When the process is consuming 100% CPU, it won't have time to reply to the Readiness probe checks, and it will be eventually removed from the Service.
+
+However, the Pod is actively counted against the active replicas for the current Deployment.
+
+In other words, not only the process isn't serving requests, but also it consumes resources.
+
+You should expose and use a Liveness probe for the current container that replies with a success response.
+
+The probe should not have any logic, and it should be used as a recovery mechanism in case the process is not responsive.
 
 ### Liveness probes values aren't the same as the Readiness
 
@@ -453,11 +471,11 @@ You could save on running an extra container for each Pod in your cluster.
 
 ### Containers do not store any state in their local filesystem
 
-Containers have their own local filesystem and you might be tempted to use it for persisting data.
+Containers have their local filesystem, and you might be tempted to use it for persisting data.
 
 However, storing persistent data in a container's local filesystem prevents the encompassing Pod from being scaled horizontally (that is, by adding or removing replicas of the Pod).
 
-This is because, by using the local filesystem, each container maintains its own "state", which means that the states of Pod replicas may diverge over time. This results in inconsistent behaviour from the user's point of view (for example, a certain piece of user information is available when the request hits one Pod, but not when the request hits another Pod).
+This is because, by using the local filesystem, each container maintains its own "state", which means that the states of Pod replicas may diverge over time. This results in inconsistent behaviour from the user's point of view (for example, a specific piece of user information is available when the request hits one Pod, but not when the request hits another Pod).
 
 Instead, any persistent information should be saved at a central place outside the Pods. For example, in a PersistentVolume in the cluster, or even better in some storage service outside the cluster.
 
@@ -469,17 +487,17 @@ Configuring the HPA allows your app to stay available and responsive under any t
 
 To configure the HPA to autoscale your app, you have to create a [HorizontalPodAutoscaler](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.16/#horizontalpodautoscaler-v1-autoscaling) resource, which defines what metric to monitor for your app.
 
-The HPA can monitor either built-in resource metric (CPU and memory usage of your Pods) or custom metrics. In the case of custom metrics, you are also responsible to collect and expose these metrics, which you can do, for example, with [Prometheus](https://prometheus.io/) and the [Prometheus Adapter](https://github.com/DirectXMan12/k8s-prometheus-adapter).
+The HPA can monitor either built-in resource metric (CPU and memory usage of your Pods) or custom metrics. In the case of custom metrics, you are also responsible for collecting and exposing these metrics, which you can do, for example, with [Prometheus](https://prometheus.io/) and the [Prometheus Adapter](https://github.com/DirectXMan12/k8s-prometheus-adapter).
 
 ### Don't use the Vertical Pod Autoscaler
 
 Analogous to the [Horizontal Pod Autoscaler (HPA)](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/), there exists the [Vertical Pod Autoscaler (VPA)](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler).
 
-The VPA can automatically adapt the resource requests and limits of your Pods, so that when a Pod needs more resources, it can get them. This can be useful for applications that can't be scaled horizontally (by adding or removing replicas).
+The VPA can automatically adapt the resource requests and limits of your Pods so that when a Pod needs more resources, it can get them. This can be useful for applications that can't be scaled horizontally (by adding or removing replicas).
 
-The VPA is currently in beta and is **not recommended for production**. Given that, and that most applications deployed to Kubernetes actually can be scaled horizontally, it is best to not use the VPA at the moment.
+The VPA is currently in beta and is **not recommended for production**. Given that, and that most applications deployed to Kubernetes actually can be scaled horizontally, it is best not to use the VPA at the moment.
 
-### Don't use the Cluster Autoscaler unless you have extremely variable workloads
+### Don't use the Cluster Autoscaler unless you have variable workloads
 
 The [Cluster Autoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler) is another type of "autoscaler" (besides the [Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) and [Vertical Pod Autoscaler](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)).
 
@@ -495,9 +513,9 @@ In most cases, it's sufficient to choose a cluster size manually and scale up or
 
 Configuration should be maintained outside the application code.
 
-This has several benefits. First, changing the configuration does not require recompiling the application. Second, the configuration can be updated when the application is running. Third, the same code can be used for different environments.
+This has several benefits. First, changing the configuration does not require recompiling the application. Second, the configuration can be updated when the application is running. Third, the same code can be used in different environments.
 
-In Kubernetes, configuration can be saved in ConfigMaps, which can then be mounted into containers as volumes are passed in as environment variables.
+In Kubernetes, the configuration can be saved in ConfigMaps, which can then be mounted into containers as volumes are passed in as environment variables.
 
 Save only non-sensitive configuration in ConfigMaps. For sensitive information (such as credentials), use the Secret resource.
 
